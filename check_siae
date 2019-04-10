@@ -1,0 +1,250 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+
+import argparse
+import configparser
+import datetime
+import logging
+import nagiosplugin
+import nagiosplugin.result
+import nagiosplugin.state
+import os
+
+import pysnmp
+
+import siae_snmp
+import siae_snmp.snmpclient
+import siae_snmp.snmpdata
+
+
+MIB_PATH = os.path.realpath(os.path.dirname(siae_snmp.__file__))
+
+_log = logging.getLogger('nagiosplugin')
+
+
+# class SIAE_BitPerSymbol
+
+class BoolContext(nagiosplugin.Context):  # pylint: disable=too-few-public-methods
+	def __init__(self, name, ok_text=None, crit_text=None, fmt_metric='{name} is {valueunit}', result_cls=nagiosplugin.result.Result):  # pylint: disable=too-many-arguments
+		self.ok_text = ok_text
+		self.crit_text = crit_text
+		super(BoolContext, self).__init__(name, fmt_metric, result_cls)
+
+	def evaluate(self, metric, resource):
+		if metric.value:
+			return self.result_cls(nagiosplugin.state.Ok, self.ok_text, metric)
+		else:
+			return self.result_cls(nagiosplugin.state.Critical, self.crit_text, metric)
+
+
+class BoolContextWarning(BoolContext):  # pylint: disable=too-few-public-methods
+	def __init__(self, name, ok_text=None, warn_text=None, fmt_metric='{name} is {valueunit}', result_cls=nagiosplugin.result.Result):  # pylint: disable=too-many-arguments
+		self.ok_text = ok_text
+		self.warn_text = warn_text
+		super(BoolContextWarning, self).__init__(name, fmt_metric, result_cls)
+
+	def evaluate(self, metric, resource):
+		if metric.value:
+			return self.result_cls(nagiosplugin.state.Ok, self.ok_text, metric)
+		else:
+			return self.result_cls(nagiosplugin.state.Warn, self.warn_text, metric)
+
+class SNMPContext(nagiosplugin.Context):  # pylint: disable=too-few-public-methods
+	def evaluate(self, metric, resource):
+		if metric.value["status"]:
+			return self.result_cls(nagiosplugin.state.Ok, None, metric)
+		else:
+			return self.result_cls(nagiosplugin.state.Critical, "Unreachable - %s" % metric.value["error_indication"], metric)
+
+
+class AlarmsContext(nagiosplugin.Context):  # pylint: disable=too-few-public-methods
+	def evaluate(self, metric, resource):
+		warns = []
+		crits = []
+
+		for key, value in metric.value.items():
+			if value > 1 and value <= 4:
+				warns.append(key)
+			elif value > 4:
+				crits.append(key)
+
+		if len(crits) > 0:
+			return self.result_cls(nagiosplugin.state.Critical, 'Critical alarms triggered - %s' % ', '.join(crits), metric)
+		elif len(warns) > 0:
+			return self.result_cls(nagiosplugin.state.Warn, 'Warnings triggered - %s' % ', '.join(warns), metric)
+		else:
+			return self.result_cls(nagiosplugin.state.Ok, 'No alarms', metric)
+
+class Siae(nagiosplugin.Resource):
+	def __init__(self, args):
+		self.args = args
+		siae_snmp.snmpclient.add_mib_path(MIB_PATH)
+		self.snmpclient = None
+
+	def probe(self):
+		t0 = datetime.datetime.now()
+		_log.debug("Probing SIAE Microelettronica device %s through SNMP", self.args.host)
+		self.snmpclient = siae_snmp.snmpclient.SnmpClient(self.args.host, siae_snmp.snmpclient.snmp_auth_data_v2c(community=self.args.community), timeout=self.args.snmp_timeout, retries=self.args.retries)
+
+		if not self.snmpclient.alive:
+			_log.warn("Device is not reachable through SNMP with error %s", self.snmpclient.error_status)
+			yield nagiosplugin.Metric('reachable', dict(status=self.snmpclient.alive, error_indication=self.snmpclient.error_indication, error_status=self.snmpclient.error_status, error_varbinds=self.snmpclient.error_varbinds))
+			return
+
+		_log.debug("Queried SIAE Microelettronica device %s through SNMP - device is reachable", self.args.host)
+		yield nagiosplugin.Metric('reachable', dict(status=True))
+		_log.debug("Found Sysname %s and sysdescr %s", self.snmpclient.sysname, self.snmpclient.sysdescr)
+
+		if 'SIAE Microelettronica' not in str(self.snmpclient.sysdescr):
+			raise nagiosplugin.CheckError("Device is not a SIAE Microelettronica device - System description is %s", self.snmpclient.sysdescr)
+
+		_log.debug("Starting SNMP polling of host %s", self.args.host)
+		sysuptime = self.snmpclient.get("SNMPv2-MIB::sysUpTime.0")
+		yield nagiosplugin.Metric("sysuptime", int(sysuptime.get_value()) / 100 / 60)
+
+
+		data_equip = self.snmpclient.gettable("SIAE-EQUIP-MIB::equipment").get_json_name()
+		if "SIAE-EQUIP-MIB::equipStationID.0" in data_equip:
+			_log.debug("Device %s station id is %s", self.args.host, data_equip["SIAE-EQUIP-MIB::equipStationID.0"])
+
+		data_unit = self.snmpclient.gettable("SIAE-UNIT-MIB::unitRecord").get_json_name()
+		if "SIAE-UNIT-MIB::unitParentSerialNumber.1" in data_unit:
+			_log.debug("Device %s serial is %s", self.args.host, data_unit["SIAE-UNIT-MIB::unitParentSerialNumber.1"])
+		if "SIAE-UNIT-MIB::unitPartnumber.1" in data_unit:
+			_log.debug("Device %s part number is %s", self.args.host, data_unit["SIAE-UNIT-MIB::unitPartNumber.1"])
+
+		data_soft = self.snmpclient.gettable("SIAE-SOFT-MIB::software").get_json_name()
+		if data_soft["SIAE-SOFT-MIB::softwareEquipmentReleaseBench1Status.0"] == 3:
+			_log.debug("Device %s loaded firmware from bench 1 release is %s", self.args.host, data_soft["SIAE-SOFT-MIB::softwareEquipmentReleaseBench1.0"])
+		elif data_soft["SIAE-SOFT-MIB::softwareEquipmentReleaseBench2Status.0"] == 3:
+			_log.debug("Device %s loaded firmware from bench 2 release is %s", self.args.host, data_soft["SIAE-SOFT-MIB::softwareEquipmentReleaseBench2.0"])
+
+
+		data_rabr = self.snmpclient.gettable("SIAE-RABR-MIB::radioBranchRecord").get_json_name()
+
+		if "SIAE-RABR-MIB::radioBranchFractionalPrx.1" in data_rabr:
+			pmrxpwr = data_rabr["SIAE-RABR-MIB::radioBranchFractionalPrx.1"]
+			yield nagiosplugin.Metric('rx_power', float(pmrxpwr)/ 10, uom='dB')
+
+		if "SIAE-RABR-MIB::radioBranchFractionalPtx.1" in data_rabr:
+			pmtxpwr = data_rabr["SIAE-RABR-MIB::radioBranchFractionalPtx.1"]
+			yield nagiosplugin.Metric('tx_power', float(pmtxpwr) / 10, uom='dB')
+
+		if "SIAE-RABR-MIB::radioBranchNormalizedMse.1" in data_rabr:
+			normalizedMSE = data_rabr["SIAE-RABR-MIB::radioBranchNormalizedMse.1"]
+			yield nagiosplugin.Metric('msr', float(normalizedMSE) / 10, uom='dB')
+
+		data_raeq_varbinds = self.snmpclient.gettable("SIAE-RAEQ-MIB::radioEquipRecord")
+		data_raeq = data_raeq_varbinds.get_json_name()
+
+		if "SIAE-RAEQ-MIB::radioEquipCurrentTxETHCapacity.1" in data_raeq:
+			yield nagiosplugin.Metric('tx_data_rate', data_raeq["SIAE-RAEQ-MIB::radioEquipCurrentTxETHCapacity.1"])
+		if "SIAE-RAEQ-MIB::radioEquipCurrentRxETHCapacity.1" in data_raeq:
+			yield nagiosplugin.Metric('rx_data_rate', data_raeq["SIAE-RAEQ-MIB::radioEquipCurrentRxETHCapacity.1"])
+
+		if self.args.modulation is not None:
+			if "SIAE-RAEQ-MIB::radioEquipAcmTxModulationInUse.1" in data_raeq:
+				tx_modulation = data_raeq["SIAE-RAEQ-MIB::radioEquipAcmTxModulationInUse.1"]
+			else:
+				tx_modulation = "unknown"
+			if "SIAE-RAEQ-MIB::radioEquipAcmRxModulationInUse.1" in data_raeq:
+				rx_modulation = data_raeq["SIAE-RAEQ-MIB::radioEquipAcmRxModulationInUse.1"]
+			else:
+				rx_modulation = "unknown"
+
+			yield nagiosplugin.Metric('tx_modulation', tx_modulation == siae_snmp.snmpdata.bitPerSymbol[self.args.modulation])
+			yield nagiosplugin.Metric('rx_modulation', rx_modulation == siae_snmp.snmpdata.bitPerSymbol[self.args.modulation])
+
+		if len(self.args.iface) > 0:
+			iface_names = self.snmpclient.gettable("SIAE-IFEXT-MIB::ifextLabel").get_json_name()
+			data_iftable = self.snmpclient.gettable("IF-MIB::ifTable").get_json_name()
+			for oid, name in iface_names.items():
+				if name in self.args.iface:
+					ifindex = oid.split('.')[-1]
+					if "IF-MIB::ifIndex.%s" % ifindex in data_iftable:
+						yield nagiosplugin.Metric('If_%s::OperStatus' % name, data_iftable["IF-MIB::ifOperStatus.%s" % ifindex])
+						yield nagiosplugin.Metric('If_%s::OctetsIn' % name, data_iftable["IF-MIB::ifInOctets.%s" % ifindex], uom='c')
+						yield nagiosplugin.Metric('If_%s::OctetsOut' % name, data_iftable["IF-MIB::ifOutOctets.%s" % ifindex], uom='c')
+						yield nagiosplugin.Metric('If_%s::ErrorsIn' % name, data_iftable["IF-MIB::ifInErrors.%s" % ifindex], uom='c')
+						yield nagiosplugin.Metric('If_%s::ErrorsOut' % name, data_iftable["IF-MIB::ifOutErrors.%s" % ifindex], uom='c')
+
+		rabr_alarm_oids = ['SIAE-RABR-MIB::radioBranchRxQualityWarningAlarm.1', 'SIAE-RABR-MIB::radioBranchRxQualityLowAlarm.1', 'SIAE-RABR-MIB::radioBranchRxPowerLowAlarm.1', 'SIAE-RABR-MIB::radioBranchTxPowerLowAlarm.1']
+		raeq_alarm_oids = ['SIAE-RAEQ-MIB::radioEquipReducedCapacityAlarm.1', 'SIAE-RAEQ-MIB::radioEquipLinkTelemetryFailAlarm.1', 'SIAE-RAEQ-MIB::radioEquipBerSyncLossAlarm.1']
+
+		alarms = dict()
+
+		for oid in rabr_alarm_oids:
+			if oid in data_rabr:
+				value = data_rabr[oid]
+				alarms[oid.split('::')[1]] = int(value)
+		for oid in raeq_alarm_oids:
+			if oid in data_raeq:
+				value = data_raeq[oid]
+				alarms[oid.split('::')[1]] = int(value)
+
+		yield nagiosplugin.Metric('alarms', alarms)
+
+
+# @nagiosplugin.guarded  # FIXME
+def main():
+	argp = argparse.ArgumentParser()
+	argp.add_argument('-v', '--verbose', action='count', default=0)
+	argp.add_argument('-c', '--config', help='config file', default='/etc/check_siae.conf')
+	argp.add_argument('-C', '--community', help='SNMP Community', default='public')
+	argp.add_argument('-H', '--host', help='Hostname or network address to check', required=True)
+	argp.add_argument('-t', '--timeout', help='Check timeout', type=int, default=30)
+	argp.add_argument('-s', '--snmp-timeout', help='SNMP timeout', dest='snmp_timeout', type=int, default=2)
+	argp.add_argument('-r', '--retries', help='SNMP retries', type=int, default=3)
+	argp.add_argument('-e', '--encryption', help='Check for encryption', action='store_true')
+	argp.add_argument('-u', '--uptime', help='Update limit in minutes to create warning', type=int, default=120)
+	argp.add_argument('-m', '--modulation', help='Force checking of modulation', default=None, choices=["bpsBPSK", "bps4QAM", "bps8PSK", "bps16QAM", "bps32QAM", "bps64QAM", "bps128QAM", "bps256QAM", "bps512QAM", "bps1024QAM", "bps2048QAM"])
+	argp.add_argument('--rate', help='check radio rate for fixed value', type=int, default=1318182)
+	argp.add_argument('-i', '--iface', help='Check interface status', default=['Radio'])
+	args = argp.parse_args()
+
+	device_defaults = dict(
+		rx_power_min_warn=-55, rx_power_min_crit=-60,
+	)
+	config_defaults = {'general': {}, args.host: device_defaults}
+
+	config_parser = configparser.ConfigParser(config_defaults)
+	config_parser.read(args.config)
+
+	if args.host not in config_parser.sections():
+		config_parser.add_section(args.host)
+
+	for key, value in device_defaults.items():
+		if not config_parser.has_option(args.host, key):
+			config_parser.set(args.host, key, str(value))
+
+	check = nagiosplugin.Check(Siae(args))
+	check.add(SNMPContext('reachable'))
+
+	if args.modulation is not None:
+		check.add(BoolContextWarning('rx_modulation', warn_text="RX Modulation is not forced modulation %s" % args.modulation))
+		check.add(BoolContextWarning('tx_modulation', warn_text="TX Modulation is not forced modulation %s" % args.modulation))
+
+	check.add(nagiosplugin.ScalarContext('msr'))
+	check.add(nagiosplugin.ScalarContext('tx_power'))
+	check.add(nagiosplugin.ScalarContext('rx_power',  warning='%i:0' % (config_parser.getint(args.host, 'rx_power_min_warn')), critical='%i:0' % (config_parser.getint(args.host, 'rx_power_min_crit'))))
+
+	check.add(nagiosplugin.ScalarContext('tx_data_rate', warning='%i:%i' % (args.rate, args.rate)))
+	check.add(nagiosplugin.ScalarContext('rx_data_rate', warning='%i:%i' % (args.rate, args.rate)))
+	check.add(nagiosplugin.ScalarContext('sysuptime', warning='@%i:%i' % (0, args.uptime)))
+
+	check.add(AlarmsContext('alarms'))
+
+	for ifname in args.iface:
+		check.add(nagiosplugin.ScalarContext('If_%s::OperStatus' % ifname, critical='1:1'))
+		check.add(nagiosplugin.ScalarContext('If_%s::OctetsIn' % ifname))
+		check.add(nagiosplugin.ScalarContext('If_%s::OctetsOut' % ifname))
+		check.add(nagiosplugin.ScalarContext('If_%s::OctetsOut' % ifname))
+		check.add(nagiosplugin.ScalarContext('If_%s::ErrorsIn' % ifname))
+		check.add(nagiosplugin.ScalarContext('If_%s::ErrorsOut' % ifname))
+
+	check.main(args.verbose, timeout=args.timeout)
+
+
+if __name__ == "__main__":
+	main()

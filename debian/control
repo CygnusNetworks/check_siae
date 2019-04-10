@@ -1,0 +1,13 @@
+Source: check-siae
+Section: python
+Priority: optional
+Maintainer: Peter Adam <debian@cygnusnetworks.de>
+Build-Depends: debhelper (>= 9), dh-python, python-all, python-setuptools
+Standards-Version: 3.9.6
+
+Package: check-siae
+Architecture: all
+Depends: ${misc:Depends}, ${python:Depends}
+Description: SIAE Microelettronica ALFOplus80HD Nagios check
+ Nagios/Icinga Plugin for SIAE Microelettronica ALFOplus80HD devices
+ using SNMP to query the device.

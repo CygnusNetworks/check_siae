@@ -1,0 +1,5 @@
+check-siae (0.10+debian1) UNRELEASED; urgency=low
+
+  * Initial version
+
+ -- Peter Adam <debian@cygnusnetworks.de>  Tue, 09 Apr 2019 13:22:46 +0200
