@@ -163,9 +163,11 @@ class Siae(nagiosplugin.Resource):
 				if name in self.args.iface:
 					ifindex = oid.split('.')[-1]
 					if "IF-MIB::ifIndex.%s" % ifindex in data_iftable:
+						octets_in = self.snmpclient.get("IF-MIB::ifHCInOctets.%s" % ifindex).get_value()
+						octets_out = self.snmpclient.get("IF-MIB::ifHCOutOctets.%s" % ifindex).get_value()
 						yield nagiosplugin.Metric('If_%s::OperStatus' % name, data_iftable["IF-MIB::ifOperStatus.%s" % ifindex])
-						yield nagiosplugin.Metric('If_%s::OctetsIn' % name, data_iftable["IF-MIB::ifInOctets.%s" % ifindex], uom='c')
-						yield nagiosplugin.Metric('If_%s::OctetsOut' % name, data_iftable["IF-MIB::ifOutOctets.%s" % ifindex], uom='c')
+						yield nagiosplugin.Metric('If_%s::OctetsIn' % name, octets_in, uom='c')
+						yield nagiosplugin.Metric('If_%s::OctetsOut' % name, octets_out, uom='c')
 						yield nagiosplugin.Metric('If_%s::ErrorsIn' % name, data_iftable["IF-MIB::ifInErrors.%s" % ifindex], uom='c')
 						yield nagiosplugin.Metric('If_%s::ErrorsOut' % name, data_iftable["IF-MIB::ifOutErrors.%s" % ifindex], uom='c')
 
