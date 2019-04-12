@@ -201,12 +201,13 @@ def main():
 	argp.add_argument('-e', '--encryption', help='Check for encryption', action='store_true')
 	argp.add_argument('-u', '--uptime', help='Update limit in minutes to create warning', type=int, default=120)
 	argp.add_argument('-m', '--modulation', help='Force checking of modulation', default=None, choices=["bpsBPSK", "bps4QAM", "bps8PSK", "bps16QAM", "bps32QAM", "bps64QAM", "bps128QAM", "bps256QAM", "bps512QAM", "bps1024QAM", "bps2048QAM"])
-	argp.add_argument('--rate', help='check radio rate for fixed value', type=int, default=1318182)
 	argp.add_argument('-i', '--iface', help='Check interface status', default=['Radio'])
 	args = argp.parse_args()
 
 	device_defaults = dict(
 		rx_power_min_warn=-55, rx_power_min_crit=-60,
+		tx_data_rate_min=1318182, tx_data_rate_max=1318182,
+		rx_data_rate_min=1318182, rx_data_rate_max=1318182,
 	)
 	config_defaults = {'general': {}, args.host: device_defaults}
 
@@ -231,8 +232,8 @@ def main():
 	check.add(nagiosplugin.ScalarContext('tx_power'))
 	check.add(nagiosplugin.ScalarContext('rx_power',  warning='%i:0' % (config_parser.getint(args.host, 'rx_power_min_warn')), critical='%i:0' % (config_parser.getint(args.host, 'rx_power_min_crit'))))
 
-	check.add(nagiosplugin.ScalarContext('tx_data_rate', warning='%i:%i' % (args.rate, args.rate)))
-	check.add(nagiosplugin.ScalarContext('rx_data_rate', warning='%i:%i' % (args.rate, args.rate)))
+	check.add(nagiosplugin.ScalarContext('tx_data_rate', warning='%i:%i' % (config_parser.getint(args.host, 'tx_data_rate_min'), config_parser.getint(args.host, 'tx_data_rate_max'))))
+	check.add(nagiosplugin.ScalarContext('rx_data_rate', warning='%i:%i' % (config_parser.getint(args.host, 'rx_data_rate_min'), config_parser.getint(args.host, 'rx_data_rate_max'))))
 	check.add(nagiosplugin.ScalarContext('sysuptime', warning='@%i:%i' % (0, args.uptime)))
 
 	check.add(AlarmsContext('alarms'))
