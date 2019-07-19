@@ -159,7 +159,7 @@ class Siae(nagiosplugin.Resource):
 		if len(self.args.iface) > 0:
 			iface_names = self.snmpclient.gettable("SIAE-IFEXT-MIB::ifextLabel").get_json_name()
 			data_iftable = self.snmpclient.gettable("IF-MIB::ifTable").get_json_name()
-			for oid, name in iface_names.items():
+			for oid, name in list(iface_names.items()):
 				if name in self.args.iface:
 					ifindex = oid.split('.')[-1]
 					if "IF-MIB::ifIndex.%s" % ifindex in data_iftable:
@@ -188,7 +188,7 @@ class Siae(nagiosplugin.Resource):
 		yield nagiosplugin.Metric('alarms', alarms)
 
 
-# @nagiosplugin.guarded  # FIXME
+#@nagiosplugin.guarded
 def main():
 	argp = argparse.ArgumentParser()
 	argp.add_argument('-v', '--verbose', action='count', default=0)

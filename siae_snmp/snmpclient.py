@@ -41,9 +41,9 @@ def load_mibs(*modules):
 def snmp_auth_data(community, version=V2C, snmp_id=None):
 	if snmp_id is None:
 		sha_256 = hashlib.sha256()  # pylint: disable=E1101
-		sha_256.update(community)
-		sha_256.update(str(time.time() * 1000))
-		sha_256.update(str(random.random()))
+		sha_256.update(community.encode('utf-8'))
+		sha_256.update(str(time.time() * 1000).encode('utf-8'))
+		sha_256.update(str(random.random()).encode('utf-8'))
 		snmp_id = sha_256.hexdigest()[:32]
 	return cmdgen.CommunityData(snmp_id, community, version)
 
@@ -277,8 +277,8 @@ class SnmpVarBinds(object):
 
 	def get_by_dict(self, oid):
 		self.dictify()
-		if oid is None and len(self.__varbinds_dict.keys()) == 1:
-			oid = self.__varbinds_dict.keys()[0]
+		if oid is None and len(list(self.__varbinds_dict.keys())) == 1:
+			oid = list(self.__varbinds_dict.keys())[0]
 		elif oid is None:
 			raise RuntimeError("Cannot query oid %r if multiple varBinds keys are present")
 		if isinstance(oid, str):
