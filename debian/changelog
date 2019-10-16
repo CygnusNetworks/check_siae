@@ -1,3 +1,9 @@
+check-siae (0.12+debian1) UNRELEASED; urgency=low
+
+  * Install pnp4nagios template
+
+ -- Peter Adam <debian@cygnusnetworks.de>  Wed, 16 Oct 2019 14:55:20 +0200
+
 check-siae (0.11+debian1) UNRELEASED; urgency=low
 
   * Switch to python3

@@ -1,1 +1,2 @@
 /usr/bin/check_siae /usr/lib/nagios/plugins/check_siae
+/usr/share/check_siae/check_siae.php /etc/pnp4nagios/templates/check_siae.php 
